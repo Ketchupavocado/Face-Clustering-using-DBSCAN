@@ -8,10 +8,13 @@ from datetime import datetime
 
 CLUSTERED_DIR = 'ClusteredFaces/'
 UNKNOWN_DIR = 'UnknownFaces/'
-RELOAD_INTERVAL = 10     # seconds
-SAVE_UNKNOWN_EVERY_N = 30  # frames
-KEEP_BEST_N = 2           # images to keep per person
-MIN_FACE_BOX_AREA = 1500  # Minimum face crop area in pixels
+RELOAD_INTERVAL = 10         # seconds
+SAVE_UNKNOWN_EVERY_N = 30    # frames
+KEEP_BEST_N = 2              # images to keep per person
+
+# Relative min/max face box area ratios (relative to frame area)
+MIN_FACE_BOX_AREA_RATIO = 0.01  # 1% of frame area
+MAX_FACE_BOX_AREA_RATIO = 0.15  # 15% of frame area
 
 os.makedirs(CLUSTERED_DIR, exist_ok=True)
 os.makedirs(UNKNOWN_DIR, exist_ok=True)
@@ -32,8 +35,8 @@ def load_known_faces():
                             enc = face_recognition.face_encodings(img, locs)[0]
                             encs.append(enc)
                             labels.append(label)
-                    except Exception as e:
-                        print(f"[WARN] Failed loading face from {img_path}: {e}")
+                    except:
+                        pass
     print(f"[INFO] Loaded {len(encs)} known faces.")
     return encs, labels
 
@@ -72,40 +75,23 @@ def prompt_name(current):
     return new if new else current
 
 # ==== Move renamed unknowns ====
-def update_named_unknowns(known_labels, tracked):
+def update_named_unknowns(known_labels):
     moved = False
-    to_remove = []
     for folder in os.listdir(UNKNOWN_DIR):
         src = os.path.join(UNKNOWN_DIR, folder)
         dst = os.path.join(CLUSTERED_DIR, folder)
         if os.path.isdir(src):
-            try:
-                if os.path.exists(dst):
-                    # Merge contents instead of crashing
-                    for file in os.listdir(src):
-                        shutil.move(os.path.join(src, file), os.path.join(dst, file))
-                    shutil.rmtree(src)
-                    print(f"[INFO] Merged '{folder}' into existing folder.")
-                else:
-                    shutil.move(src, dst)
-                    print(f"[INFO] Moved '{folder}' to clustered.")
-                moved = True
-
-                # Remove tracked entries with this unknown folder
-                for t in tracked:
-                    if t.folder == folder:
-                        to_remove.append(t)
-
-            except Exception as e:
-                print(f"[ERROR] Failed moving '{folder}': {e}")
-
-    # Remove invalid trackers after move
-    for t in to_remove:
-        if t in tracked:
-            tracked.remove(t)
-
+            if os.path.exists(dst):
+                # Merge contents instead of crashing
+                for file in os.listdir(src):
+                    shutil.move(os.path.join(src, file), os.path.join(dst, file))
+                shutil.rmtree(src)
+                print(f"[INFO] Merged '{folder}' into existing folder.")
+            else:
+                shutil.move(src, dst)
+                print(f"[INFO] Moved '{folder}' to clustered.")
+            moved = True
     return moved
-
 
 # ==== Cleanup helpers ====
 def keep_best_clustered_images(clustered_dir=CLUSTERED_DIR, keep_n=KEEP_BEST_N):
@@ -166,7 +152,7 @@ def run():
 
         # Reload knowns if new labels found
         if time.time() - last_reload > RELOAD_INTERVAL:
-            if update_named_unknowns(known_labels, tracked):
+            if update_named_unknowns(known_labels):
                 known_encs, known_labels = load_known_faces()
             last_reload = time.time()
 
@@ -185,32 +171,30 @@ def run():
                 if clicked.folder:
                     src = os.path.join(UNKNOWN_DIR, clicked.folder)
                     dst = os.path.join(CLUSTERED_DIR, new_label)
-                    try:
-                        if os.path.exists(dst):
-                            # Merge contents if folder exists
-                            for f in os.listdir(src):
-                                shutil.move(os.path.join(src, f), os.path.join(dst, f))
-                            shutil.rmtree(src)
-                            print(f"[INFO] Merged '{clicked.folder}' into existing '{new_label}'.")
-                        else:
-                            shutil.move(src, dst)
-                            print(f"[INFO] Moved '{clicked.folder}' to clustered as '{new_label}'.")
-                    except Exception as e:
-                        print(f"[ERROR] Failed moving folder during rename: {e}")
+                    shutil.move(src, dst)
                     clicked.folder = None
                 clicked.label = new_label
                 known_encs, known_labels = load_known_faces()
                 print(f"[INFO] Renamed to '{new_label}' and retrained.")
             clicked = None
 
-        # Detect new faces every 15 frames or if no trackers
+        # Detect new faces every 15 frames
         if frame_count % 15 == 0 or not tracked:
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             locs = face_recognition.face_locations(rgb)
             encs = face_recognition.face_encodings(rgb, locs)
+
+            frame_area = frame.shape[0] * frame.shape[1]
+
             for (t, r, b, l), e in zip(locs, encs):
                 box = (l, t, r-l, b-t)
-                if any(intersect(box, t_.bbox) for t_ in tracked): continue
+                area = (r - l) * (b - t)
+
+                if area < MIN_FACE_BOX_AREA_RATIO * frame_area or area > MAX_FACE_BOX_AREA_RATIO * frame_area:
+                    continue  # skip faces too small or too large relative to frame size
+
+                if any(intersect(box, t_.bbox) for t_ in tracked):
+                    continue
 
                 matches = face_recognition.compare_faces(known_encs, e, tolerance=0.45)
                 name = "Unknown"
@@ -234,13 +218,11 @@ def run():
                 x, y, w, h = map(int, t.bbox)
                 cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
                 cv2.putText(frame, t.label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-
                 if t.label.startswith("Unknown") and frame_count - t.last_saved > SAVE_UNKNOWN_EVERY_N:
-                    if w * h >= MIN_FACE_BOX_AREA:
-                        crop = frame[y:y+h, x:x+w]
-                        fname = datetime.now().strftime("%Y%m%d_%H%M%S.jpg")
-                        cv2.imwrite(os.path.join(UNKNOWN_DIR, t.folder, fname), crop)
-                        t.last_saved = frame_count
+                    crop = frame[y:y+h, x:x+w]
+                    fname = datetime.now().strftime("%Y%m%d_%H%M%S.jpg")
+                    cv2.imwrite(os.path.join(UNKNOWN_DIR, t.folder, fname), crop)
+                    t.last_saved = frame_count
 
         cv2.imshow('Live', frame)
         if cv2.waitKey(1) & 0xFF == ord('q'):
