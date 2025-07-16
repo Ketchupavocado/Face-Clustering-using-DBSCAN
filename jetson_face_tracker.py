@@ -6,8 +6,8 @@ import face_recognition
 
 # Configuration
 CAMERA_INDEX = 0
-KNOWN_FACES_DIR = "Clustered_faces"
-UNKNOWN_FACES_DIR = "Clustered_faces"
+KNOWN_FACES_DIR = "Clusteredfaces"
+UNKNOWN_FACES_DIR = "Clusteredfaces"
 FRAME_SAVE_INTERVAL = 5  # seconds between debug frame saves
 DEBUG_SAVE_FRAMES = False
 
