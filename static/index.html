@@ -1,27 +1,32 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>WebRTC Face Tracker</title>
+  <title>Jetson USB Face Tracker</title>
 </head>
 <body>
-  <h1>Jetson WebRTC Face Tracker</h1>
+  <h1>Jetson USB Camera Face Tracker</h1>
   <video id="video" autoplay playsinline controls></video>
   <script>
-    const pc = new RTCPeerConnection();
-    document.body.onclick = async () => {
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      const resp = await fetch('/offer', {
-        method: 'POST',
-        body: JSON.stringify(pc.localDescription),
-        headers: { 'Content-Type': 'application/json' }
+    async function start() {
+      const pc = new RTCPeerConnection();
+      document.body.addEventListener('click', async () => {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        const resp = await fetch('/offer', {
+          method: 'POST',
+          body: JSON.stringify(pc.localDescription),
+          headers: { 'Content-Type': 'application/json' }
+        });
+        const answer = await resp.json();
+        await pc.setRemoteDescription(answer);
       });
-      const answer = await resp.json();
-      await pc.setRemoteDescription(answer);
+      pc.ontrack = event => {
+        document.getElementById('video').srcObject = event.streams[0];
+      };
     }
-    pc.ontrack = e => video.srcObject = e.streams[0];
+    start();
   </script>
-  <p>Click anywhere to start the video</p>
+  <p>Click anywhere to start.</p>
 </body>
 </html>
