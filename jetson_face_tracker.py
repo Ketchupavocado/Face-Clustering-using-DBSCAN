@@ -1,50 +1,80 @@
-from flask import Flask, Response
 import cv2
-import threading
+import os
+import time
+import numpy as np
+import face_recognition
 
-app = Flask(__name__)
-camera = cv2.VideoCapture(0)  # USB camera
+# Configuration
+CAMERA_INDEX = 0
+KNOWN_FACES_DIR = "clustered_faces"
+UNKNOWN_FACES_DIR = "clustered_faces"
+FRAME_SAVE_INTERVAL = 5  # seconds between debug frame saves
+DEBUG_SAVE_FRAMES = False
 
-def generate_frames():
+# Load known faces
+print("[INFO] Loading known faces...")
+known_encodings = []
+known_names = []
+
+for person in os.listdir(KNOWN_FACES_DIR):
+    person_path = os.path.join(KNOWN_FACES_DIR, person)
+    if not os.path.isdir(person_path):
+        continue
+    for image_name in os.listdir(person_path):
+        image_path = os.path.join(person_path, image_name)
+        image = face_recognition.load_image_file(image_path)
+        encodings = face_recognition.face_encodings(image)
+        if encodings:
+            known_encodings.append(encodings[0])
+            known_names.append(person)
+print(f"[INFO] Loaded {len(known_encodings)} known faces.")
+
+# Start video
+print("[INFO] Starting camera... Press Ctrl+C to stop")
+cap = cv2.VideoCapture(CAMERA_INDEX)
+
+if not cap.isOpened():
+    raise RuntimeError("[ERROR] Camera failed to open.")
+
+last_save_time = time.time()
+
+try:
     while True:
-        success, frame = camera.read()
-        if not success:
+        ret, frame = cap.read()
+        if not ret:
+            print("[WARNING] Failed to grab frame.")
             break
-        else:
-            # Encode frame as JPEG
-            ret, buffer = cv2.imencode('.jpg', frame)
-            frame_bytes = buffer.tobytes()
 
-            # MJPEG stream format
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        boxes = face_recognition.face_locations(rgb)
+        encodings = face_recognition.face_encodings(rgb, boxes)
 
-@app.route('/video_feed')
-def video_feed():
-    return Response(generate_frames(),
-                    mimetype='multipart/x-mixed-replace; boundary=frame')
+        for (box, encoding) in zip(boxes, encodings):
+            matches = face_recognition.compare_faces(known_encodings, encoding)
+            name = "Unknown"
 
-@app.route('/')
-def index():
-    return """
-    <html>
-      <head>
-        <title>Jetson USB Camera</title>
-      </head>
-      <body>
-        <h1>Live Camera Stream</h1>
-        <img src="/video_feed" width="720" height="480">
-      </body>
-    </html>
-    """
+            if True in matches:
+                matched_idx = matches.index(True)
+                name = known_names[matched_idx]
+            else:
+                name = f"Unknown_{int(time.time())}"
+                face_image = frame[box[0]:box[2], box[3]:box[1]]
+                save_path = os.path.join(UNKNOWN_FACES_DIR, name)
+                os.makedirs(save_path, exist_ok=True)
+                file_path = os.path.join(save_path, f"{int(time.time())}.jpg")
+                cv2.imwrite(file_path, face_image)
+                print(f"[NEW] Saved unknown face to: {file_path}")
 
-def run_flask():
-    app.run(host='0.0.0.0', port=5000, threaded=True)
+            print(f"[TRACK] Detected: {name}, Box: {box}")
 
-if __name__ == '__main__':
-    t = threading.Thread(target=run_flask)
-    t.daemon = True
-    t.start()
+        # Optional frame saving for debug
+        if DEBUG_SAVE_FRAMES and (time.time() - last_save_time > FRAME_SAVE_INTERVAL):
+            cv2.imwrite(f"debug_frame_{int(time.time())}.jpg", frame)
+            last_save_time = time.time()
 
-    print("[INFO] MJPEG stream running at http://<jetson-ip>:5000")
-    t.join()
+except KeyboardInterrupt:
+    print("\n[INFO] Interrupted by user. Exiting...")
+
+finally:
+    cap.release()
+    print("[INFO] Camera released.")
