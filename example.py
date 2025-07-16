@@ -9,7 +9,7 @@ from datetime import datetime
 CLUSTERED_DIR = 'ClusteredFaces/'
 UNKNOWN_DIR = 'UnknownFaces/'
 RELOAD_INTERVAL = 10     # seconds
-SAVE_UNKNOWN_EVERY_N = 30  # frames
+SAVE_UNKNOWN_EVERY_N = 50  # frames
 KEEP_BEST_N = 2           # images to keep per person
 MIN_BOX_FRAC = 0.02       # 2% of frame area
 MAX_BOX_FRAC = 0.25       # 25% of frame area
@@ -157,7 +157,7 @@ def run():
         key = cv2.waitKey(1)
         if key == ord('q'):
             break
-        elif key == 127:  # Delete key
+        elif key == ord('d'):  # Delete key
             print("[KEY] Deleted all trackers")
             tracked.clear()
 
