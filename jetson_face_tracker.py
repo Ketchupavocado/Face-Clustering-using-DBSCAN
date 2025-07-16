@@ -1,70 +1,133 @@
-import os, cv2, time, numpy as np, face_recognition
-from flask import Flask, Response, render_template_string
+import cv2
+import os
+import time
+import threading
+import numpy as np
+import face_recognition
+from flask import Flask, Response
 
-# Config
+# Configuration
 KNOWN_DIR = "ClusteredFaces"
 MIN_FRAC, MAX_FRAC = 0.02, 0.25
-DETECT_EVERY = 5
+DETECT_INTERVAL = 10
 
-# Load known faces
+# Load known encodings
 known_encs, known_labels = [], []
 for person in os.listdir(KNOWN_DIR):
     p = os.path.join(KNOWN_DIR, person)
     if os.path.isdir(p):
-        for fn in os.listdir(p):
-            if fn.lower().endswith(('.jpg','.png')):
-                img = face_recognition.load_image_file(os.path.join(p,fn))
+        for img_file in os.listdir(p):
+            img_path = os.path.join(p, img_file)
+            if img_file.lower().endswith(('.jpg', '.png')):
+                img = face_recognition.load_image_file(img_path)
                 encs = face_recognition.face_encodings(img)
                 if encs:
                     known_encs.append(encs[0])
                     known_labels.append(person)
-print(f"[LOAD] {len(known_encs)} known")
+print(f"[INFO] Loaded {len(known_encs)} known faces")
 
-# Flask setup
+# Flask app
 app = Flask(__name__)
+output_frame = None
+lock = threading.Lock()
+
+# Camera setup
 cap = cv2.VideoCapture(0)
+frame_width = int(cap.get(3))
+frame_height = int(cap.get(4))
 
-HTML = '''
-<html><body>
-<h1>MJPEG Face Tracker</h1>
-<img src="{{ url_for('video_feed') }}" width="640"/>
-</body></html>
-'''
+trackers = []
+labels = []
+frame_count = 0
 
-@app.route("/")
-def index():
-    return render_template_string(HTML)
-
-def gen():
-    frame_count = 0
+def process_frames():
+    global output_frame, frame_count, trackers, labels
     while True:
         ret, frame = cap.read()
         if not ret:
             continue
 
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        h, w = frame.shape[:2]
         frame_count += 1
-        if frame_count % DETECT_EVERY == 0:
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+        if frame_count % DETECT_INTERVAL == 0:
+            # New detections
+            trackers.clear()
+            labels.clear()
+
             boxes = face_recognition.face_locations(rgb)
             encs = face_recognition.face_encodings(rgb, boxes)
-            h,w = frame.shape[:2]
-            for (top, right, bottom, left), enc in zip(boxes, encs):
-                frac = (right-left)*(bottom-top)/(h*w)
-                if frac < MIN_FRAC or frac > MAX_FRAC:
-                    continue
-                matches = face_recognition.compare_faces(known_encs, enc, tolerance=0.45)
-                name = known_labels[np.argmin(face_recognition.face_distance(known_encs, enc))] if True in matches else "Unknown"
-                cv2.rectangle(frame, (left, top), (right, bottom), (0,255,0), 2)
-                cv2.putText(frame, name, (left, top-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2)
 
-        ret, out = cv2.imencode('.jpg', frame)
-        if not ret:
-            continue
-        yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + out.tobytes() + b'\r\n')
+            for (top, right, bottom, left), enc in zip(boxes, encs):
+                box_area = (right - left) * (bottom - top)
+                screen_area = h * w
+                frac = box_area / screen_area
+
+                if not (MIN_FRAC <= frac <= MAX_FRAC):
+                    continue
+
+                matches = face_recognition.compare_faces(known_encs, enc, tolerance=0.45)
+                name = "Unknown"
+                if True in matches:
+                    best_match_index = np.argmin(face_recognition.face_distance(known_encs, enc))
+                    name = known_labels[best_match_index]
+
+                tracker = cv2.TrackerCSRT_create()
+                tracker.init(frame, (left, top, right - left, bottom - top))
+                trackers.append(tracker)
+                labels.append(name)
+        else:
+            # Use existing trackers
+            new_trackers = []
+            new_labels = []
+            for tracker, label in zip(trackers, labels):
+                success, box = tracker.update(frame)
+                if success:
+                    (x, y, w_box, h_box) = [int(v) for v in box]
+                    cv2.rectangle(frame, (x, y), (x + w_box, y + h_box), (0, 255, 0), 2)
+                    cv2.putText(frame, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                    new_trackers.append(tracker)
+                    new_labels.append(label)
+            trackers = new_trackers
+            labels = new_labels
+
+        with lock:
+            output_frame = frame.copy()
+
+@app.route("/")
+def index():
+    return """
+    <html>
+    <head><title>MJPEG Face Stream</title></head>
+    <body>
+        <h1>Jetson Face Tracker</h1>
+        <img src="/video_feed" width="640" />
+    </body>
+    </html>
+    """
+
+def generate():
+    global output_frame
+    while True:
+        with lock:
+            if output_frame is None:
+                continue
+            ret, buffer = cv2.imencode('.jpg', output_frame)
+            if not ret:
+                continue
+            frame = buffer.tobytes()
+
+        yield (b'--frame\r\n'
+               b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
 
 @app.route("/video_feed")
 def video_feed():
-    return Response(gen(), mimetype='multipart/x-mixed-replace; boundary=frame')
+    return Response(generate(),
+                    mimetype="multipart/x-mixed-replace; boundary=frame")
 
+# Run everything
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    t = threading.Thread(target=process_frames, daemon=True)
+    t.start()
+    app.run(host="0.0.0.0", port=5000, threaded=True)
