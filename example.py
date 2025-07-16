@@ -8,13 +8,9 @@ from datetime import datetime
 
 CLUSTERED_DIR = 'ClusteredFaces/'
 UNKNOWN_DIR = 'UnknownFaces/'
-RELOAD_INTERVAL = 10         # seconds
-SAVE_UNKNOWN_EVERY_N = 30    # frames
-KEEP_BEST_N = 2              # images to keep per person
-
-# Relative min/max face box area ratios (relative to frame area)
-MIN_FACE_BOX_AREA_RATIO = 0.01  # 1% of frame area
-MAX_FACE_BOX_AREA_RATIO = 0.15  # 15% of frame area
+RELOAD_INTERVAL = 10        # seconds
+SAVE_UNKNOWN_EVERY_N = 30   # frames
+KEEP_BEST_N = 2             # images to keep per person
 
 os.makedirs(CLUSTERED_DIR, exist_ok=True)
 os.makedirs(UNKNOWN_DIR, exist_ok=True)
@@ -40,7 +36,7 @@ def load_known_faces():
     print(f"[INFO] Loaded {len(encs)} known faces.")
     return encs, labels
 
-# ==== Tracker wrapper ====
+# ==== Tracker class ====
 class FaceTrack:
     def __init__(self, tracker, label, folder, last_save_frame):
         self.tracker = tracker
@@ -49,15 +45,16 @@ class FaceTrack:
         self.last_saved = last_save_frame
         self.bbox = None
 
-# ==== Check box overlap ====
+# ==== Overlap checking ====
 def intersect(a, b, iou=0.4):
     if a is None or b is None: return False
-    x1, y1, w1, h1 = a; x2, y2, w2, h2 = map(int, b)
+    x1, y1, w1, h1 = a
+    x2, y2, w2, h2 = map(int, b)
     xi, yi = max(x1,x2), max(y1,y2)
     x2i, y2i = min(x1+w1, x2+w2), min(y1+h1, y2+h2)
     inter = max(0, x2i-xi) * max(0, y2i-yi)
     union = w1*h1 + w2*h2 - inter
-    return inter/union > iou
+    return inter / union > iou
 
 # ==== Get new Unknown name ====
 def get_new_unknown(existing):
@@ -69,11 +66,6 @@ def get_new_unknown(existing):
     os.makedirs(os.path.join(UNKNOWN_DIR, name), exist_ok=True)
     return name
 
-# ==== Rename handler ====
-def prompt_name(current):
-    new = input(f"Enter new name for '{current}' (or press Enter to skip): ").strip()
-    return new if new else current
-
 # ==== Move renamed unknowns ====
 def update_named_unknowns(known_labels):
     moved = False
@@ -82,7 +74,6 @@ def update_named_unknowns(known_labels):
         dst = os.path.join(CLUSTERED_DIR, folder)
         if os.path.isdir(src):
             if os.path.exists(dst):
-                # Merge contents instead of crashing
                 for file in os.listdir(src):
                     shutil.move(os.path.join(src, file), os.path.join(dst, file))
                 shutil.rmtree(src)
@@ -93,8 +84,8 @@ def update_named_unknowns(known_labels):
             moved = True
     return moved
 
-# ==== Cleanup helpers ====
-def keep_best_clustered_images(clustered_dir=CLUSTERED_DIR, keep_n=KEEP_BEST_N):
+# ==== Cleanup ====
+def keep_best_clustered_images(clustered_dir=CLUSTERED_DIR, keep_n=2):
     for label in os.listdir(clustered_dir):
         person_dir = os.path.join(clustered_dir, label)
         if not os.path.isdir(person_dir): continue
@@ -122,7 +113,7 @@ def hybrid_cleanup():
     cleanup_unknown_faces()
     print("[INFO] Cleanup complete.")
 
-# ==== Main camera face tracker ====
+# ==== Main loop ====
 def run():
     cap = cv2.VideoCapture(0)
     known_encs, known_labels = load_known_faces()
@@ -130,27 +121,13 @@ def run():
     frame_count = 0
     last_reload = time.time()
     existing_unknowns = set(os.listdir(UNKNOWN_DIR))
-    clicked = None
-
-    def on_click(event, x, y, flags, param):
-        nonlocal clicked
-        if event == cv2.EVENT_LBUTTONDOWN:
-            for t in tracked:
-                if t.bbox:
-                    x0, y0, w, h = map(int, t.bbox)
-                    if x0 <= x <= x0+w and y0 <= y <= y0+h:
-                        clicked = t
-                        break
-
-    cv2.namedWindow('Live')
-    cv2.setMouseCallback('Live', on_click)
 
     while True:
         ret, frame = cap.read()
         if not ret: break
         frame_count += 1
 
-        # Reload knowns if new labels found
+        # Reload faces if renamed
         if time.time() - last_reload > RELOAD_INTERVAL:
             if update_named_unknowns(known_labels):
                 known_encs, known_labels = load_known_faces()
@@ -164,65 +141,51 @@ def run():
             else:
                 tracked.remove(t)
 
-        # Handle rename click
-        if clicked:
-            new_label = prompt_name(clicked.label)
-            if new_label != clicked.label:
-                if clicked.folder:
-                    src = os.path.join(UNKNOWN_DIR, clicked.folder)
-                    dst = os.path.join(CLUSTERED_DIR, new_label)
-                    shutil.move(src, dst)
-                    clicked.folder = None
-                clicked.label = new_label
-                known_encs, known_labels = load_known_faces()
-                print(f"[INFO] Renamed to '{new_label}' and retrained.")
-            clicked = None
-
-        # Detect new faces every 15 frames
+        # Detect faces
         if frame_count % 15 == 0 or not tracked:
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             locs = face_recognition.face_locations(rgb)
             encs = face_recognition.face_encodings(rgb, locs)
-
-            frame_area = frame.shape[0] * frame.shape[1]
-
             for (t, r, b, l), e in zip(locs, encs):
-                box = (l, t, r-l, b-t)
-                area = (r - l) * (b - t)
-
-                if area < MIN_FACE_BOX_AREA_RATIO * frame_area or area > MAX_FACE_BOX_AREA_RATIO * frame_area:
-                    continue  # skip faces too small or too large relative to frame size
-
-                if any(intersect(box, t_.bbox) for t_ in tracked):
-                    continue
+                box = (l, t, r - l, b - t)
+                if any(intersect(box, t_.bbox) for t_ in tracked): continue
 
                 matches = face_recognition.compare_faces(known_encs, e, tolerance=0.45)
                 name = "Unknown"
                 folder = None
+
                 if True in matches:
                     name = known_labels[np.argmin(face_recognition.face_distance(known_encs, e))]
                 else:
                     folder = get_new_unknown(existing_unknowns)
+                    print(f"[INFO] Detected new unknown person: {folder}")
 
                 tracker = cv2.TrackerCSRT_create()
-                if tracker is None:
-                    print("[ERROR] Tracker is None. Skipping this face.")
-                    continue
+                if tracker:
+                    tracker.init(frame, box)
+                    tracked.append(FaceTrack(tracker, name, folder, frame_count))
 
-                tracker.init(frame, box)
-                tracked.append(FaceTrack(tracker, name, folder, frame_count))
-
-        # Draw & save faces
+        # Draw boxes and save unknown faces
         for t in tracked:
             if t.bbox:
                 x, y, w, h = map(int, t.bbox)
-                cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
+                cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
                 cv2.putText(frame, t.label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-                if t.label.startswith("Unknown") and frame_count - t.last_saved > SAVE_UNKNOWN_EVERY_N:
-                    crop = frame[y:y+h, x:x+w]
+
+                if (
+                    t.label.startswith("Unknown") and
+                    t.folder is not None and
+                    frame_count - t.last_saved > SAVE_UNKNOWN_EVERY_N
+                ):
+                    crop = frame[y:y + h, x:x + w]
                     fname = datetime.now().strftime("%Y%m%d_%H%M%S.jpg")
-                    cv2.imwrite(os.path.join(UNKNOWN_DIR, t.folder, fname), crop)
-                    t.last_saved = frame_count
+                    save_path = os.path.join(UNKNOWN_DIR, t.folder, fname)
+                    try:
+                        cv2.imwrite(save_path, crop)
+                        print(f"[SAVE] Image saved to: {save_path}")
+                        t.last_saved = frame_count
+                    except Exception as e:
+                        print(f"[ERROR] Failed to save image: {e}")
 
         cv2.imshow('Live', frame)
         if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -230,7 +193,7 @@ def run():
 
     cap.release()
     cv2.destroyAllWindows()
-    hybrid_cleanup()  # Cleanup on exit
+    hybrid_cleanup()
 
 if __name__ == "__main__":
     run()
