@@ -28,11 +28,11 @@ If you find this code helpful please don't forget to give star and follow.
 * Just put all the cropped face (as this code doesn't have crop face code) images into "face_images" directory.
   (you can add the crop face code in "create_face_database" function at the marked place in "get_encodings.py")
   
-* Then run the "example.py" file to stat the face database making procedure. If you want to use it in your code; then 
+* Then run the "example.py" file to stat the face database making procedure. If you want to use it in your code; then
   you need to put "get_encodings.py" in your project directory and have to use the function "create_face_database".
   ```python
   import get_encodings as enc
-  root_path = 'face_images' # path to your
+  root_path = 'ClusteredFaces' # path to your
   dir_name, data_len = enc.create_face_database(root_path)
   ```
 
