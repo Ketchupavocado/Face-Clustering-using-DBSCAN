@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>WebRTC Face Tracker</title>
+</head>
+<body>
+  <h1>Jetson WebRTC Face Tracker</h1>
+  <video id="video" autoplay playsinline controls></video>
+  <script>
+    const pc = new RTCPeerConnection();
+    document.body.onclick = async () => {
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      const resp = await fetch('/offer', {
+        method: 'POST',
+        body: JSON.stringify(pc.localDescription),
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const answer = await resp.json();
+      await pc.setRemoteDescription(answer);
+    }
+    pc.ontrack = e => video.srcObject = e.streams[0];
+  </script>
+  <p>Click anywhere to start the video</p>
+</body>
+</html>
