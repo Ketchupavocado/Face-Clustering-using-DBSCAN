@@ -1,6 +1,3 @@
-# It looks like your code is already saving faces and logging them, but you reported that the directories and files aren't appearing in the filesystem despite the logs. That typically indicates either the wrong working directory, or that the script lacks write permissions to the target path.
-
-# Here are some fixes and additional logging to help debug and ensure the directories/files are written:
 
 import os
 import cv2
