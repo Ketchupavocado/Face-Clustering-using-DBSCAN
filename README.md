@@ -1,5 +1,8 @@
 **Final Project Video**
-https://github.com/Ketchupavocado/Face-Clustering-using-DBSCAN/blob/main/FinalProject.mp4
+
+https://github.com/user-attachments/assets/4c295864-2bd9-42ad-9480-d1df834fabb2
+
+
 
 # Face Clustering Algorithm
 
