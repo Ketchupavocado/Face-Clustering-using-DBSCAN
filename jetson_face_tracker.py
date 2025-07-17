@@ -35,7 +35,7 @@ def load_known_faces():
     print("[INFO] Loading known faces...")
     for person in os.listdir(KNOWN_DIR):
         p = os.path.join(KNOWN_DIR, person)
-        if os.path.isdir(p):
+        if os.path.isdir(p) and not person.startswith("Unknown"):
             for img_file in os.listdir(p):
                 if img_file.lower().endswith(('.jpg', '.png')):
                     img_path = os.path.join(p, img_file)
@@ -63,7 +63,7 @@ def overlaps(rect1, rect2):
 # === Save to Unknown_X folder ===
 def get_next_unknown_id():
     existing = [f for f in os.listdir(UNKNOWN_DIR) if f.startswith("Unknown_")]
-    numbers = [int(f.split("_")[1]) for f in existing if "_" in f and f.split("_")[1].isdigit()]
+    numbers = [int(f.split("_")[1]) for f in existing if f.split("_")[1].isdigit()]
     next_id = max(numbers, default=0) + 1
     return next_id
 
@@ -72,6 +72,7 @@ def save_unknown_face(face_img, folder_id):
     os.makedirs(save_dir, exist_ok=True)
     fname = f"{str(uuid.uuid4())}.jpg"
     cv2.imwrite(os.path.join(save_dir, fname), face_img)
+    print(f"[INFO] Saved unknown face to {save_dir}/{fname}")
 
 # === Main Processing Loop ===
 def process_frames():
@@ -123,34 +124,33 @@ def process_frames():
                 new_buffers.append([] if name == "Unknown" else None)
                 new_folder_ids.append(folder_id)
 
-        else:
-            for i, tracker in enumerate(trackers):
-                tracker.update(rgb)
-                pos = tracker.get_position()
-                x1, y1, x2, y2 = int(pos.left()), int(pos.top()), int(pos.right()), int(pos.bottom())
+        for i, tracker in enumerate(trackers):
+            tracker.update(rgb)
+            pos = tracker.get_position()
+            x1, y1, x2, y2 = int(pos.left()), int(pos.top()), int(pos.right()), int(pos.bottom())
 
-                if x1 < 0 or y1 < 0 or x2 > w or y2 > h:
+            if x1 < 0 or y1 < 0 or x2 > w or y2 > h:
+                continue
+
+            face_img = frame[y1:y2, x1:x2]
+            label = labels[i]
+            folder_id = folder_ids[i]
+
+            if label == "Unknown":
+                save_buffers[i].append(face_img)
+                if len(save_buffers[i]) >= SAVE_FRAMES:
+                    for img in save_buffers[i]:
+                        save_unknown_face(img, folder_id)
                     continue
 
-                face_img = frame[y1:y2, x1:x2]
-                label = labels[i]
-                folder_id = folder_ids[i]
+            new_trackers.append(tracker)
+            new_labels.append(label)
+            new_buffers.append(save_buffers[i] if label == "Unknown" else None)
+            new_folder_ids.append(folder_id)
 
-                if label == "Unknown":
-                    save_buffers[i].append(face_img)
-                    if len(save_buffers[i]) >= SAVE_FRAMES:
-                        for img in save_buffers[i]:
-                            save_unknown_face(img, folder_id)
-                        continue
-
-                new_trackers.append(tracker)
-                new_labels.append(label)
-                new_buffers.append(save_buffers[i] if label == "Unknown" else None)
-                new_folder_ids.append(folder_id)
-
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                cv2.putText(frame, label, (x1, y1 - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(frame, label, (x1, y1 - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
         trackers = new_trackers
         labels = new_labels
