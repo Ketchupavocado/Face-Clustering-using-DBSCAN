@@ -19,7 +19,7 @@ OVERLAP_THRESHOLD = 0.4
 
 # === Globals ===
 known_encs, known_labels = [], []
-trackers, labels, save_buffers = [], [], []
+trackers, labels, save_buffers, folder_ids = [], [], [], []
 output_frame = None
 lock = threading.Lock()
 frame_count = 0
@@ -29,7 +29,6 @@ app = Flask(__name__)
 cap = cv2.VideoCapture(0)
 frame_width = int(cap.get(3))
 frame_height = int(cap.get(4))
-
 
 # === Load Known Faces ===
 def load_known_faces():
@@ -47,7 +46,6 @@ def load_known_faces():
                         known_labels.append(person)
     print(f"[INFO] Loaded {len(known_encs)} known faces")
 
-
 # === Face Overlap Helper ===
 def overlaps(rect1, rect2):
     x1, y1, x2, y2 = rect1
@@ -62,20 +60,22 @@ def overlaps(rect1, rect2):
     iou = inter_area / float(box1_area + box2_area - inter_area + 1e-5)
     return iou > OVERLAP_THRESHOLD
 
-
 # === Save to Unknown_X folder ===
+def get_next_unknown_id():
+    existing = [f for f in os.listdir(UNKNOWN_DIR) if f.startswith("Unknown_")]
+    numbers = [int(f.split("_")[1]) for f in existing if "_" in f and f.split("_")[1].isdigit()]
+    next_id = max(numbers, default=0) + 1
+    return next_id
+
 def save_unknown_face(face_img, folder_id):
     save_dir = os.path.join(UNKNOWN_DIR, f"Unknown_{folder_id}")
     os.makedirs(save_dir, exist_ok=True)
     fname = f"{str(uuid.uuid4())}.jpg"
     cv2.imwrite(os.path.join(save_dir, fname), face_img)
 
-
 # === Main Processing Loop ===
 def process_frames():
-    global output_frame, frame_count, trackers, labels, save_buffers
-
-    unknown_id_counter = 0
+    global output_frame, frame_count, trackers, labels, save_buffers, folder_ids
 
     while True:
         ret, frame = cap.read()
@@ -86,7 +86,7 @@ def process_frames():
         h, w = frame.shape[:2]
         frame_count += 1
 
-        new_trackers, new_labels, new_buffers = [], [], []
+        new_trackers, new_labels, new_buffers, new_folder_ids = [], [], [], []
 
         if frame_count % DETECT_INTERVAL == 0:
             face_locations = face_recognition.face_locations(rgb)
@@ -100,12 +100,14 @@ def process_frames():
                     continue
 
                 name = "Unknown"
+                folder_id = None
                 matches = face_recognition.compare_faces(known_encs, enc, tolerance=0.45)
                 if True in matches:
                     best_idx = np.argmin(face_recognition.face_distance(known_encs, enc))
                     name = known_labels[best_idx]
+                else:
+                    folder_id = get_next_unknown_id()
 
-                # Check for overlapping boxes
                 new_box = (left, top, right, bottom)
                 if any(overlaps(new_box, (int(t.get_position().left()),
                                           int(t.get_position().top()),
@@ -113,13 +115,13 @@ def process_frames():
                                           int(t.get_position().bottom()))) for t in trackers):
                     continue
 
-                # dlib tracker
                 tracker = dlib.correlation_tracker()
                 tracker.start_track(rgb, dlib.rectangle(left, top, right, bottom))
 
                 new_trackers.append(tracker)
                 new_labels.append(name)
                 new_buffers.append([] if name == "Unknown" else None)
+                new_folder_ids.append(folder_id)
 
         else:
             for i, tracker in enumerate(trackers):
@@ -132,19 +134,20 @@ def process_frames():
 
                 face_img = frame[y1:y2, x1:x2]
                 label = labels[i]
+                folder_id = folder_ids[i]
 
                 if label == "Unknown":
                     save_buffers[i].append(face_img)
                     if len(save_buffers[i]) >= SAVE_FRAMES:
-                        unknown_id_counter += 1
                         for img in save_buffers[i]:
-                            save_unknown_face(img, unknown_id_counter)
-                        continue  # drop this tracker after saving
+                            save_unknown_face(img, folder_id)
+                        continue
+
                 new_trackers.append(tracker)
                 new_labels.append(label)
                 new_buffers.append(save_buffers[i] if label == "Unknown" else None)
+                new_folder_ids.append(folder_id)
 
-                # Draw box
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                 cv2.putText(frame, label, (x1, y1 - 10),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
@@ -152,10 +155,10 @@ def process_frames():
         trackers = new_trackers
         labels = new_labels
         save_buffers = new_buffers
+        folder_ids = new_folder_ids
 
         with lock:
             output_frame = frame.copy()
-
 
 # === Flask Routes ===
 @app.route("/")
@@ -166,11 +169,10 @@ def index():
     <body>
         <h2>Jetson Tracker Feed</h2>
         <img src="/video_feed" width="640">
-        <p>Press Delete key in terminal to clear trackers (not supported in browser)</p>
+        <p>Press Delete key in terminal to clear trackers (if supported).</p>
     </body>
     </html>
     """)
-
 
 def generate():
     global output_frame
@@ -186,25 +188,23 @@ def generate():
         yield (b"--frame\r\n"
                b"Content-Type: image/jpeg\r\n\r\n" + frame + b"\r\n")
 
-
 @app.route("/video_feed")
 def video_feed():
     return Response(generate(),
                     mimetype="multipart/x-mixed-replace; boundary=frame")
 
-
 # === Keyboard Tracker Reset ===
 def keyboard_listener():
     import keyboard
-    global trackers, labels, save_buffers
+    global trackers, labels, save_buffers, folder_ids
     while True:
         if keyboard.is_pressed("delete"):
             print("[INFO] Clearing all trackers...")
             trackers.clear()
             labels.clear()
             save_buffers.clear()
+            folder_ids.clear()
         time.sleep(0.5)
-
 
 # === Run ===
 if __name__ == "__main__":
