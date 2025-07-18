@@ -26,9 +26,11 @@ pip install numpy==1.20.3
 ### How to use my code
 
 **Using the CPU version**
+
 To use the CPU version of the script, open up a python engine of your choice and paste the script. In a .venv terminal, make sure you have all dependencies installed which should all be above in the requirements section of the README. Once this is completed, simply run the script and you should see a new app of the live feed from your camera appear. When a face is shown in the camera and is within a certain distance of the camera, it will begin to track and follow your face, which should be detected as unknown. Soon, you should see in the console that images have been taken, and moved to a directory named Unknown_#. After clicking Q the code should instantly stop running and after renaming the unknown directory, your face should be saved and ready to be recognized from now on. Within just a few steps you have a fully functioning recognition model.
 
 **Using the GPU version**
+
 To use the GPU version, it's a little bit more complex and some additional dependencies will be required, once the requirements are fulfilled in the SSH terminal of your NVIDIA GPU. Simply type python3 j and press tab. The full command should have appeared, after pressing enter you should be linked to a new tab where your live feed can be easily accessed, even from your phone or another mobile device. Since this is completely headless you can do this almost anywhere. Once this is done, the USB Camera linked to your Jetson should boot up and begin to track for faces. Once unknown faces are detected, it will begin to rapidly take photos and generate a large variety of folders. Using an app such as WinSCP to preview the images, you can choose a folder that has images you liked and you can type in your terminal: mv ClusteredFaces/Unknown_#(The # of the folder you liked) ClusteredFaces/(Your name or what you want to call yourself). Once you've done this, just deleted the remaining unknown folders and bam, its ready to run and fully operational!
 
 ### Thank you so much for using/checking out my project!
