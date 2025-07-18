@@ -1,4 +1,7 @@
 # Live Clustering using DBSCAN
+
+![license](https://img.shields.io/github/license/ketchupavocado/Face-Clustering-using-DBSCAN)
+
 The idea of my project is an easy to use facial detection and recognition script that can be understood and used within minutes. With it's simple and smooth live feed and 2 different variations of the script for both CPU and GPU, it can be useful to everybody.
 
 
@@ -35,5 +38,5 @@ To use the GPU version, it's a little bit more complex and some additional depen
 
 ### Thank you so much for using/checking out my project!
 
-![license](https://img.shields.io/github/license/ketchupavocado/Face-Clustering-using-DBSCAN)
+
 
